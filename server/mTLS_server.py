@@ -1,39 +1,70 @@
-from flask import Flask, request
-from OpenSSL import SSL
-
-app = Flask(__name__)
+import os
+import ssl
+import socket
 
 # Specify the path to the server certificate and private key files
-CERT_FILE = 'path/to/server_certificate.pem'
-KEY_FILE = 'path/to/server_private_key.pem'
+CERT_FILE = './certs/server.crt'
+KEY_FILE = './certs/server.key'
 
 # Specify the path to the CA certificate file (optional, if client verification is required)
-CA_CERT_FILE = 'path/to/ca_certificate.pem'
+CA_CERT_FILE = './certs/ca-cert.crt'
 
-# Enable SSL/TLS context
-context = SSL.Context(SSL.SSLv23_METHOD)
-context.use_certificate_file(CERT_FILE)
-context.use_privatekey_file(KEY_FILE)
+def main():
+    # Create a TLS context
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(os.path.join(os.getcwd(), CERT_FILE), os.path.join(os.getcwd(), KEY_FILE))
 
-# Optional: Load the CA certificate for client verification
-if CA_CERT_FILE:
-    context.load_verify_locations(CA_CERT_FILE)
-    context.verify_mode = SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT
+    # Create a TCP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("localhost", 443))
+    sock.listen(1)
 
-# Route for the protected resource
-@app.route('/protected', methods=['GET'])
-def protected_resource():
-    # Verify client certificate
-    if request.environ.get('SSL_CLIENT_VERIFY') != 'SUCCESS':
-        return 'Unauthorized', 401
+    # Accept connections
+    while True:
+        client, addr = sock.accept()
 
-    # Get client certificate
-    client_cert = request.environ.get('SSL_CLIENT_CERT')
+        # Create a new TLS connection
+        connection = context.wrap_socket(client)
 
-    # Process the client certificate
-    # Add your authentication logic here
+        # Get the client's certificate
+        certificate = connection.getpeercert()
 
-    return 'Authenticated', 200
+        # Validate the client's certificate
+        if not validate_certificate(certificate):
+            print("Invalid certificate")
+            connection.close()
+            continue
 
-if __name__ == '__main__':
-    app.run(ssl_context=context, host='0.0.0.0', port=5000)
+        # Process the request
+        process_request(connection)
+
+        # Close the connection
+        connection.close()
+
+def validate_certificate(certificate):
+    # Check the certificate's validity
+    if not certificate.check_expiration():
+        return False
+
+    # Check the certificate's revocation status
+    if not certificate.check_revocation():
+        return False
+
+    # Check the certificate's chain
+    if not certificate.verify():
+        return False
+
+    return True
+
+def process_request(connection):
+    # Read the request
+    request = connection.recv(1024)
+
+    # Process the request
+    response = process_request(request)
+
+    # Send the response
+    connection.sendall(response)
+
+if __name__ == "__main__":
+    main()
